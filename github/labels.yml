@@ -1,0 +1,23 @@
+# Existing labels for pmt-awk-trial-2.
+# These are intentionally non-overlapping with AWK labels to exercise the
+# additions-only overlap policy during awk-install.
+
+- name: priority:high
+  color: b60205
+  description: Needs immediate attention.
+
+- name: priority:medium
+  color: fbca04
+  description: Important but not urgent.
+
+- name: priority:low
+  color: 0e8a16
+  description: Nice to have; address when capacity allows.
+
+- name: team:backend
+  color: 1d76db
+  description: Owned or led by the backend team.
+
+- name: team:frontend
+  color: 5319e7
+  description: Owned or led by the frontend team.
