@@ -21,3 +21,101 @@
 - name: team:frontend
   color: 5319e7
   description: Owned or led by the frontend team.
+
+# AWK labels added by awk-install — additions only, existing labels preserved.
+
+- name: bug
+  color: d73a4a
+  description: Broken, confusing, or incorrect behavior.
+
+- name: needs-grill
+  color: f9d0c4
+  description: Needs clarification against docs, architecture, or product intent.
+
+- name: prd
+  color: c5def5
+  description: Product requirements document or product-shaped planning work.
+
+- name: prd-ready
+  color: bfdadc
+  description: PRD is ready to be sliced into implementation issues.
+
+- name: needs-slicing
+  color: fef2c0
+  description: Needs breakdown into independently reviewable vertical slices.
+
+- name: vertical-slice
+  color: d4c5f9
+  description: One focused implementation task intended for a single pull request.
+
+- name: agent-ready
+  color: 0e8a16
+  description: Clear enough for an agent to implement.
+
+- name: execution:agent
+  color: 0e8a16
+  description: Approved work that an agent can complete without additional human decisions.
+
+- name: execution:human
+  color: d93f0b
+  description: Work that requires a human decision, review, credential, or product judgment before progress.
+
+- name: execution:mixed
+  color: fbca04
+  description: Work that contains agent-executable tasks and explicit human checkpoints.
+
+- name: agent-in-progress
+  color: 1d76db
+  description: An agent is actively working this issue.
+
+- name: pr-open
+  color: 5319e7
+  description: A pull request exists for this issue.
+
+- name: needs-review
+  color: fbca04
+  description: Needs human, AI, or CI review.
+
+- name: needs-fix
+  color: d93f0b
+  description: Review comments or failed checks need changes.
+
+- name: blocked
+  color: b60205
+  description: Cannot proceed until a dependency, decision, or external issue is resolved.
+
+- name: blocked:issue
+  color: b60205
+  description: Blocked by another issue or pull request.
+
+- name: blocked:human
+  color: d93f0b
+  description: Blocked by a required human decision or review.
+
+- name: blocked:external
+  color: 5319e7
+  description: Blocked by an external system, vendor, credential, or dependency.
+
+- name: completed
+  color: 0e8a16
+  description: Work is complete and merged or otherwise accepted.
+
+- name: investigation
+  color: 006b75
+  description: Research or diagnosis before PRD or implementation.
+
+- name: docs
+  color: 0075ca
+  description: Documentation-only or documentation-heavy work.
+
+- name: skill
+  color: 7057ff
+  description: Work related to reusable agent skills.
+
+- name: template
+  color: ededed
+  description: Work related to reusable repository templates.
+
+- name: automation
+  color: 5319e7
+  description: Workflow automation, validation, sync, or dispatch support.

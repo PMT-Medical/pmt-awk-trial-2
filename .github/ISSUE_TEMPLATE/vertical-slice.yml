@@ -1,0 +1,133 @@
+name: Vertical Slice
+description: Define one independently reviewable implementation task.
+title: "[Slice] "
+labels:
+  - agent-ready
+  - vertical-slice
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for one focused task that an agent can complete in a single pull request.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What user or developer-visible result should this slice deliver?
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Link the parent PRD, related issues, docs, ADRs, or relevant code areas.
+    validations:
+      required: true
+  - type: dropdown
+    id: execution-mode
+    attributes:
+      label: Execution Mode
+      description: Who can move this slice forward once it is approved?
+      options:
+        - Agent-executable
+        - Human-decision required
+        - Mixed agent and human work
+    validations:
+      required: true
+  - type: textarea
+    id: workflow-state
+    attributes:
+      label: Workflow State
+      description: Current state for Kanban planning and issue triage.
+      placeholder: Proposed, agent-ready, blocked, agent-in-progress, pr-open, needs-review, needs-fix, or completed.
+    validations:
+      required: true
+  - type: textarea
+    id: recommended-skill
+    attributes:
+      label: Recommended Skill
+      description: Which AWK skill should the implementing or reviewing agent use, and why?
+      placeholder: |
+        Recommended: awk-tdd
+        Rationale: Use for agent-executable implementation work with defined verification.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What should change in this slice?
+      placeholder: List expected files, modules, commands, behavior, or docs.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out Of Scope
+      description: What should not be included in this pull request?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: List the concrete conditions that must be met.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: What tests, checks, or manual verification should be run?
+    validations:
+      required: true
+  - type: checkboxes
+    id: delivery-workflow
+    attributes:
+      label: Delivery Workflow
+      options:
+        - label: Implementation must happen on a non-default working branch, not directly on main, master, trunk, or another protected base branch.
+          required: true
+        - label: A focused pull request must be opened for this slice before the issue is marked completed.
+          required: true
+        - label: Final approval and merge are owned by a human maintainer.
+          required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies And Sequencing
+      description: Note prerequisite issues, blocked work, parallelizable work, follow-up slices, and native GitHub relationships to set if available.
+      placeholder: |
+        Blocked by: None
+        Blocks: None
+        Can run in parallel with: None
+        Follow-up slices: None
+        Native GitHub relationships to set, if available:
+        - Parent issue: None
+        - Blocked by dependencies: None
+        - Blocking dependencies: None
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Note areas where implementation should be careful.
+    validations:
+      required: false
+  - type: checkboxes
+    id: agent-readiness
+    attributes:
+      label: Agent Readiness
+      options:
+        - label: The task has one clear goal.
+          required: true
+        - label: Expected verification is defined.
+          required: true
+        - label: Out-of-scope work is explicit.
+          required: true
+        - label: The issue is small enough for one focused pull request.
+          required: true
+        - label: The slice requires a branch and pull request before completion.
+          required: true
