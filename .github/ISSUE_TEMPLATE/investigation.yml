@@ -1,0 +1,43 @@
+name: Investigation
+description: Explore uncertainty before writing a PRD or implementation slice.
+title: "[Investigation] "
+labels:
+  - investigation
+  - needs-grill
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What needs to be learned or decided?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Link related issues, PRDs, docs, ADRs, code areas, incidents, or examples.
+    validations:
+      required: false
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: What limits the investigation?
+    validations:
+      required: false
+  - type: textarea
+    id: expected-output
+    attributes:
+      label: Expected Output
+      description: What artifact should this produce?
+      placeholder: Recommendation, decision record, updated docs, prototype notes, issue breakdown, or no-go result.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done When
+      description: How will we know the investigation is complete?
+    validations:
+      required: true

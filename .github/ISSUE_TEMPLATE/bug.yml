@@ -1,0 +1,85 @@
+name: Bug Report
+description: Report broken, confusing, or incorrect behavior.
+title: "[Bug] "
+labels:
+  - bug
+  - needs-grill
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is broken or behaving incorrectly?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction Steps
+      description: How can someone reproduce the problem?
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Paste logs, screenshots, links, command output, failing checks, or affected files.
+    validations:
+      required: false
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who or what is blocked, degraded, or at risk?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Note repository, branch, commit, tool version, browser, OS, or runtime details when relevant.
+    validations:
+      required: false
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: Is there a known workaround?
+    validations:
+      required: false
+  - type: dropdown
+    id: execution-mode
+    attributes:
+      label: Execution Mode
+      description: Who can move this bug forward once it is triaged?
+      options:
+        - Agent-executable
+        - Human-decision required
+        - Mixed agent and human work
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: What test, check, or manual confirmation would prove the bug is fixed?
+    validations:
+      required: true

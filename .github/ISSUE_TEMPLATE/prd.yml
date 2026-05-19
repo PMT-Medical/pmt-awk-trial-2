@@ -1,0 +1,86 @@
+name: PRD
+description: Define a product requirement before slicing implementation work.
+title: "[PRD] "
+labels:
+  - needs-grill
+  - prd
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for product-shaped or cross-cutting work that needs clarification before implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are we solving, and for whom?
+      placeholder: Describe the current pain, missing capability, or workflow gap.
+    validations:
+      required: true
+  - type: textarea
+    id: goals
+    attributes:
+      label: Goals
+      description: What should be true when this is done?
+      placeholder: List concrete outcomes.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals
+      description: What should explicitly stay out of scope?
+    validations:
+      required: true
+  - type: textarea
+    id: users
+    attributes:
+      label: Users And Workflows
+      description: Who uses this, and what workflow changes?
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Existing Context
+      description: Link relevant docs, ADRs, issues, PRs, code areas, or prior decisions.
+    validations:
+      required: false
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      description: List functional and non-functional requirements.
+      placeholder: Use checkboxes if helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: How will humans know the PRD has been satisfied?
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks And Constraints
+      description: Note technical, product, security, migration, operational, or sequencing risks.
+    validations:
+      required: false
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open Questions
+      description: What still needs human decision or investigation?
+    validations:
+      required: false
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness
+      options:
+        - label: Existing repository context has been reviewed.
+        - label: Architecture-sensitive decisions are called out.
+        - label: This can be sliced into independently reviewable issues.
+        - label: Human review is complete before implementation starts.
