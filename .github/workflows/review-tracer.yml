@@ -31,6 +31,7 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       issue_number: ${{ steps.resolve.outputs.issue_number }}
       should_run: ${{ steps.resolve.outputs.should_run }}
+      needs_body_patch: ${{ steps.resolve.outputs.needs_body_patch }}
 
     env:
       GH_TOKEN: ${{ github.token }}
@@ -47,6 +48,7 @@ jobs:
             echo "pr_number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
             echo "issue_number=" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "needs_body_patch=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -60,9 +62,9 @@ jobs:
             exit 0
           fi
 
-          # Re-fetch labels to avoid relying solely on the event payload.
-          issue_labels="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" \
-            --jq '[.labels[].name] | join(",")')"
+          # Re-fetch the issue to avoid relying solely on the event payload.
+          issue_json="$(gh api "repos/${REPOSITORY}/issues/${issue_number}")"
+          issue_labels="$(jq -r '[.labels[].name] | join(",")' <<<"$issue_json")"
 
           # Exact match: pad with commas so pr-open is not a substring of another label.
           if ! echo ",$issue_labels," | grep -q ",pr-open,"; then
@@ -71,17 +73,20 @@ jobs:
             exit 0
           fi
 
-          # Discover the linked PR using two ordered paths:
+          # Discover the linked PR using three ordered paths:
           # 1. Branch naming convention (agent/issue-{N}-*): AWK tracer PRs always use this name.
           # 2. Durable issue reference in PR body (Closes/Fixes/Resolves/Relates to #N):
           #    Copilot and other agents may use different branch names; the body keyword
           #    is the most portable GitHub signal linking a PR to an issue.
+          # 3. Copilot-authored PR when the issue has a known Copilot assignee:
+          #    Copilot may strip the Relates to #N body reference from its final PR,
+          #    so neither branch naming nor body reference may match.
           # If multiple unique PRs match across all paths, fail safely rather than
           # picking ambiguously.
           open_prs_json="$(gh pr list \
             --repo "$REPOSITORY" \
             --state open \
-            --json number,headRefName,body)"
+            --json number,headRefName,body,author)"
 
           # Path 1: branch naming convention.
           branch_matched_prs="$(jq -r --arg prefix "agent/issue-${issue_number}-" \
@@ -93,7 +98,31 @@ jobs:
             '[.[] | select((.body // "") | test("(?i)(closes|fixes|resolves|relates to)\\s+#" + $n + "([^0-9]|$)")) | .number | tostring] | join("\n")' \
             <<<"$open_prs_json")"
 
-          unique_matched_prs="$(printf '%s\n%s\n' "$branch_matched_prs" "$body_matched_prs" | sed '/^$/d' | sort -n -u)"
+          # Path 3: Copilot-authored PR when the issue has a known Copilot assignee.
+          # Only matches PRs whose body either has no issue reference at all, or
+          # already references this issue — this prevents false-positives when
+          # multiple Copilot issues are in flight and an unrelated Copilot PR
+          # references a different issue.
+          copilot_matched_prs=""
+          copilot_login="$(jq -r '.assignees[] | select(.login == "Copilot" or .login == "copilot-swe-agent[bot]") | .login' <<<"$issue_json" | head -1)"
+          if [[ -n "$copilot_login" ]]; then
+            # Accept both known Copilot login forms for PR author matching.
+            # GitHub has returned "Copilot" (issue assignee) and "copilot-swe-agent[bot]"
+            # (historical) — the issue assignee and PR author contexts may differ.
+            copilot_matched_prs="$(jq -r --arg n "$issue_number" \
+              '[.[] |
+                select(.author.login == "Copilot" or .author.login == "copilot-swe-agent[bot]") |
+                select(
+                  ((.body // "") | test("(?i)(closes|fixes|resolves|relates to)\\s+#[0-9]+") | not)
+                  or
+                  ((.body // "") | test("(?i)(closes|fixes|resolves|relates to)\\s+#" + $n + "([^0-9]|$)"))
+                ) |
+                .number | tostring
+              ] | join("\n")' \
+              <<<"$open_prs_json")"
+          fi
+
+          unique_matched_prs="$(printf '%s\n%s\n%s\n' "$branch_matched_prs" "$body_matched_prs" "$copilot_matched_prs" | sed '/^$/d' | sort -n -u)"
 
           pr_number=""
           match_count=0
@@ -106,11 +135,13 @@ jobs:
             echo "Ambiguous: ${match_count} open PRs match issue #${issue_number} across discovery paths — manual resolution required." >&2
             echo "Branch matches: $(echo "$branch_matched_prs" | tr '\n' ' ')" >&2
             echo "Body matches: $(echo "$body_matched_prs" | tr '\n' ' ')" >&2
+            echo "Copilot-authored matches: $(echo "$copilot_matched_prs" | tr '\n' ' ')" >&2
             echo "Matched PR numbers: $(echo "$unique_matched_prs" | tr '\n' ' ')" >&2
             gh issue comment "$issue_number" \
               --repo "$REPOSITORY" \
-              --body "Review tracer found ${match_count} open PRs matching issue #${issue_number} across discovery paths. Ambiguous match — manual resolution required. Branch matches: $(echo "$branch_matched_prs" | tr '\n' ' '). Body-reference matches: $(echo "$body_matched_prs" | tr '\n' ' '). Unique matched PRs: $(echo "$unique_matched_prs" | tr '\n' ' '). Workflow run: ${run_url}"
+              --body "Review tracer found ${match_count} open PRs matching issue #${issue_number} across discovery paths. Ambiguous match — manual resolution required. Branch matches: $(echo "$branch_matched_prs" | tr '\n' ' '). Body-reference matches: $(echo "$body_matched_prs" | tr '\n' ' '). Copilot-authored matches: $(echo "$copilot_matched_prs" | tr '\n' ' '). Unique matched PRs: $(echo "$unique_matched_prs" | tr '\n' ' '). Workflow run: ${run_url}"
             echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "needs_body_patch=false" >> "$GITHUB_OUTPUT"
             exit 0
           elif [[ "$match_count" -eq 1 ]]; then
             pr_number="$unique_matched_prs"
@@ -118,15 +149,27 @@ jobs:
           fi
 
           if [[ -z "$pr_number" ]]; then
-            echo "No open PR found for issue #${issue_number} (checked: branch naming convention, PR body reference) — skipping." >&2
+            echo "No open PR found for issue #${issue_number} (checked: branch naming convention, PR body reference, Copilot assignee) — skipping." >&2
             echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "needs_body_patch=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # Check whether the discovered PR body contains a durable issue reference.
+          # If not, the review job will patch the PR body before running its full
+          # analysis so future label-triggered runs can find the PR by body reference
+          # (Path 2) without depending on Copilot branch names.
+          needs_body_patch="false"
+          pr_body_in_list="$(jq -r --arg n "$pr_number" '.[] | select(.number | tostring == $n) | .body // ""' <<<"$open_prs_json")"
+          if ! echo "$pr_body_in_list" | grep -qiE "(closes|fixes|resolves|relates to)\s+#${issue_number}([^0-9]|$)"; then
+            needs_body_patch="true"
           fi
 
           echo "Resolved: issue #${issue_number} -> PR #${pr_number}." >&2
           echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
           echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
           echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "needs_body_patch=${needs_body_patch}" >> "$GITHUB_OUTPUT"
 
   review:
     name: Inspect pull request and post structured review findings
@@ -142,6 +185,29 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
+      - name: Add durable issue reference to PR body if missing
+        if: needs.resolve.outputs.needs_body_patch == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          current_body="$(jq -r '.body // ""' <<<"$pr_json")"
+
+          # Re-check in case the body was updated between resolve and now.
+          if ! echo "$current_body" | grep -qiE "(closes|fixes|resolves|relates to)\s+#${TRIGGER_ISSUE_NUMBER}([^0-9]|$)"; then
+            patched_body="$(printf '%s\n\nRelates to #%s' "$current_body" "$TRIGGER_ISSUE_NUMBER")"
+            jq -n --arg body "$patched_body" '{body: $body}' | \
+              gh api \
+                --method PATCH \
+                "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+                --input -
+
+            gh issue comment "$TRIGGER_ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Review tracer added a missing \`Relates to #${TRIGGER_ISSUE_NUMBER}\` reference to PR #${PR_NUMBER} body for durable discovery. Workflow run: ${RUN_URL}"
+          fi
+
       - name: Validate pull request and extract linked issue
         id: validate
         shell: bash
