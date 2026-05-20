@@ -1,0 +1,357 @@
+name: Fix Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number whose existing branch should receive fix-agent commits.
+        required: true
+        type: number
+      issue_number:
+        description: Linked issue number whose labels track workflow state.
+        required: true
+        type: number
+      review_run_url:
+        description: Review tracer workflow run URL that produced the agent-fixable findings.
+        required: true
+        type: string
+      findings_summary:
+        description: Short summary of the agent-fixable findings.
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: fix-agent-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR_NUMBER: ${{ inputs.pr_number }}
+  ISSUE_NUMBER: ${{ inputs.issue_number }}
+  REVIEW_RUN_URL: ${{ inputs.review_run_url }}
+  FINDINGS_SUMMARY: ${{ inputs.findings_summary }}
+  REPOSITORY: ${{ github.repository }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  MAX_FIX_CYCLES: 3
+
+jobs:
+  fix:
+    name: Apply agent-fixable review findings to existing PR branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate PR, issue, and cycle limit
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "pr_number must be numeric." >&2
+            exit 1
+          fi
+
+          if [[ ! "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "issue_number must be numeric." >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+
+          pr_state="$(jq -r '.state' <<<"$pr_json")"
+          if [[ "$pr_state" != "open" ]]; then
+            echo "PR #${PR_NUMBER} is not open." >&2
+            exit 1
+          fi
+
+          pr_body="$(jq -r '.body // ""' <<<"$pr_json")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          head_ref="$(jq -r '.head.ref' <<<"$pr_json")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          default_branch="$(gh repo view "$REPOSITORY" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+
+          linked_issue=""
+          if echo "$pr_body" | grep -qiE '(closes|fixes|resolves|relates to)\s+#[0-9]+'; then
+            linked_issue="$(echo "$pr_body" | grep -ioE '(closes|fixes|resolves|relates to)\s+#[0-9]+' | head -1 | grep -oE '[0-9]+')"
+          elif [[ "$head_ref" =~ ^agent/issue-([0-9]+)- ]]; then
+            linked_issue="${BASH_REMATCH[1]}"
+          fi
+
+          if [[ -z "$linked_issue" ]]; then
+            gh pr comment "$PR_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Fix agent stopped: it could not verify a linked issue for PR #${PR_NUMBER}. No branch was modified. Workflow run: ${RUN_URL}"
+            echo "PR #${PR_NUMBER} is missing a verifiable linked issue." >&2
+            exit 1
+          fi
+
+          if [[ "$linked_issue" != "$ISSUE_NUMBER" ]]; then
+            gh pr comment "$PR_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Fix agent stopped: workflow input issue #${ISSUE_NUMBER} does not match PR #${PR_NUMBER}'s linked issue #${linked_issue}. No branch was modified. Workflow run: ${RUN_URL}"
+            echo "Input issue #${ISSUE_NUMBER} does not match linked issue #${linked_issue}." >&2
+            exit 1
+          fi
+
+          issue_json="$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}")"
+          issue_state="$(jq -r '.state' <<<"$issue_json")"
+          if [[ "$issue_state" != "open" ]]; then
+            echo "Issue #${ISSUE_NUMBER} is not open." >&2
+            exit 1
+          fi
+
+          if [[ "$head_repo" != "$REPOSITORY" ]]; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --add-label "needs-fix" \
+              --add-label "blocked:human"
+            gh issue comment "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Fix agent stopped for PR #${PR_NUMBER}: the PR branch is not in ${REPOSITORY}, so the workflow will not push commits to it. Labels: \`needs-fix\` + \`blocked:human\`. Workflow run: ${RUN_URL}"
+            exit 1
+          fi
+
+          if [[ "$head_ref" == "$default_branch" ]]; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --add-label "needs-fix" \
+              --add-label "blocked:human"
+            gh issue comment "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Fix agent stopped for PR #${PR_NUMBER}: the PR head branch is the repository default branch (\`${default_branch}\`). The workflow will not push fix-agent commits to a default branch. Labels: \`needs-fix\` + \`blocked:human\`. Workflow run: ${RUN_URL}"
+            exit 1
+          fi
+
+          issue_labels="$(jq -r '[.labels[].name] | join(",")' <<<"$issue_json")"
+          for required_label in pr-open needs-fix; do
+            if ! echo ",$issue_labels," | grep -q ",${required_label},"; then
+              echo "Issue #${ISSUE_NUMBER} must have '${required_label}' before fix agent runs." >&2
+              exit 1
+            fi
+          done
+
+          if echo ",$issue_labels," | grep -q ",blocked:human,"; then
+            echo "Issue #${ISSUE_NUMBER} is blocked:human; fix agent will not run." >&2
+            exit 1
+          fi
+
+          comments_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPOSITORY" --json comments)"
+
+          completed_cycle_count="$(
+            jq -r '
+              [.comments[].body
+               | select(contains("awk-fix-agent-cycle-count:"))
+               | capture("awk-fix-agent-cycle-count: (?<cycle>[0-9]+)").cycle
+               | tonumber] | max // 0
+            ' <<<"$comments_json"
+          )"
+
+          completed_cycle_for_run="$(
+            jq -r --arg run "$REVIEW_RUN_URL" '
+              [.comments[].body
+               | select(contains("awk-fix-agent-cycle-count:"))
+               | select(contains("Review tracer run: " + $run))
+               | capture("awk-fix-agent-cycle-count: (?<cycle>[0-9]+)").cycle
+              ] | last // ""
+            ' <<<"$comments_json"
+          )"
+
+          pr_body_cycle="$(grep -oE '<!-- awk-fix-agent-cycle-count: [0-9]+ -->' <<<"$pr_body" | tail -1 | grep -oE '[0-9]+' || true)"
+          pr_body_review_run="$(sed -n 's/.*<!-- awk-fix-agent-review-run: \(.*\) -->.*/\1/p' <<<"$pr_body" | tail -1 || true)"
+
+          cycle_started="false"
+          cycle_recorded="false"
+          next_cycle=""
+          if [[ -n "$completed_cycle_for_run" ]]; then
+            next_cycle="$completed_cycle_for_run"
+            cycle_started="true"
+            cycle_recorded="true"
+          elif [[ -n "$pr_body_cycle" && "$pr_body_review_run" == "$REVIEW_RUN_URL" ]]; then
+            next_cycle="$pr_body_cycle"
+            cycle_started="true"
+          fi
+
+          if [[ -z "$next_cycle" && "$completed_cycle_count" -ge "$MAX_FIX_CYCLES" ]]; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --add-label "needs-fix" \
+              --add-label "blocked:human"
+            gh issue comment "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "Fix agent stopped for PR #${PR_NUMBER}: attempt limit reached (${completed_cycle_count}/${MAX_FIX_CYCLES} prior completed fix cycles). Labels: \`needs-fix\` + \`blocked:human\`. Workflow run: ${RUN_URL}"
+            echo "Attempt limit reached." >&2
+            exit 1
+          fi
+
+          if [[ -z "$next_cycle" ]]; then
+            next_cycle=$((completed_cycle_count + 1))
+          fi
+
+          artifact_path="docs/automation-fix-agent-runs/pr-${PR_NUMBER}-cycle-${next_cycle}.md"
+
+          echo "head_ref=${head_ref}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "linked_issue=${linked_issue}" >> "$GITHUB_OUTPUT"
+          echo "next_cycle=${next_cycle}" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=${artifact_path}" >> "$GITHUB_OUTPUT"
+          echo "cycle_started=${cycle_started}" >> "$GITHUB_OUTPUT"
+          echo "cycle_recorded=${cycle_recorded}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out existing PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.validate.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Commit fix-cycle artifact to existing branch
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cycle="${{ steps.validate.outputs.next_cycle }}"
+          artifact_path="${{ steps.validate.outputs.artifact_path }}"
+          desired_artifact="$RUNNER_TEMP/fix-agent-artifact.md"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p "$(dirname "$artifact_path")"
+          {
+            echo "# Fix Agent Cycle ${cycle} for PR #${PR_NUMBER}"
+            echo ""
+            echo "This artifact records an automated fix-agent cycle on the existing PR branch."
+            echo ""
+            echo "- Pull request: #${PR_NUMBER}"
+            echo "- Linked issue: #${ISSUE_NUMBER}"
+            echo "- Fix cycle: ${cycle}/${MAX_FIX_CYCLES}"
+            echo "- Review tracer run: ${REVIEW_RUN_URL}"
+            echo "- Findings summary: ${FINDINGS_SUMMARY:-agent-fixable structural findings}"
+            echo ""
+            echo "The fix agent did not approve, merge, or create a new pull request."
+          } > "$desired_artifact"
+
+          if [[ -f "$artifact_path" ]] && grep -Fq -- "$REVIEW_RUN_URL" "$artifact_path"; then
+            echo "Artifact already recorded for this review tracer run."
+          else
+            if [[ -f "$artifact_path" ]]; then
+              echo "Artifact ${artifact_path} already exists for a different review tracer run." >&2
+              exit 1
+            fi
+
+            cp "$desired_artifact" "$artifact_path"
+            git add "$artifact_path"
+            if git diff --cached --quiet; then
+              echo "No artifact changes to commit."
+            else
+              git commit -m "Record fix agent cycle ${cycle} for PR #${PR_NUMBER}"
+              git push origin HEAD:${{ steps.validate.outputs.head_ref }}
+            fi
+          fi
+
+      - name: Update pull request body with fix-agent evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          pr_body="$(jq -r '.body // ""' <<<"$pr_json")"
+          cycle="${{ steps.validate.outputs.next_cycle }}"
+          artifact_path="${{ steps.validate.outputs.artifact_path }}"
+
+          if ! grep -qiE '(closes|fixes|resolves|relates to)\s+#'"$ISSUE_NUMBER" <<<"$pr_body"; then
+            pr_body="${pr_body}"$'\n\n'"Relates to #${ISSUE_NUMBER}"
+          fi
+
+          if ! grep -qiE '^##+ Verification|^Verification performed|Verification:' <<<"$pr_body"; then
+            pr_body="${pr_body}"$'\n\n''## Verification'$'\n\n'"- Fix agent cycle ${cycle} committed ${artifact_path}."
+          fi
+
+          if ! grep -qiE 'implementation tracer|tracer evidence|tracer run' <<<"$pr_body"; then
+            pr_body="${pr_body}"$'\n\n''## Tracer Evidence'$'\n\n'"- Review tracer run: ${REVIEW_RUN_URL}"$'\n'"- Workflow run: ${RUN_URL}"
+          fi
+
+          if grep -q '<!-- awk-fix-agent-cycle-count:' <<<"$pr_body"; then
+            pr_body="$(perl -0pe 's/<!-- awk-fix-agent-cycle-count: \d+ -->/<!-- awk-fix-agent-cycle-count: '"$cycle"' -->/g' <<<"$pr_body")"
+          else
+            pr_body="${pr_body}"$'\n\n'"<!-- awk-fix-agent-cycle-count: ${cycle} -->"
+          fi
+
+          if grep -q '<!-- awk-fix-agent-review-run:' <<<"$pr_body"; then
+            pr_body="$(perl -0pe 's#<!-- awk-fix-agent-review-run: .*? -->#<!-- awk-fix-agent-review-run: '"$REVIEW_RUN_URL"' -->#g' <<<"$pr_body")"
+          else
+            pr_body="${pr_body}"$'\n'"<!-- awk-fix-agent-review-run: ${REVIEW_RUN_URL} -->"
+          fi
+
+          gh pr edit "$PR_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body "$pr_body"
+
+      - name: Restore linked issue to needs-review
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          issue_labels="$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name] | join(",")')"
+
+          if ! echo ",$issue_labels," | grep -q ",needs-review,"; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --add-label "needs-review"
+          fi
+
+          if echo ",$issue_labels," | grep -q ",needs-fix,"; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --remove-label "needs-fix"
+          fi
+
+          final_labels="$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name] | join(",")')"
+          if ! echo ",$final_labels," | grep -q ",needs-review,"; then
+            echo "Issue #${ISSUE_NUMBER} is missing needs-review after fix-agent label restore." >&2
+            exit 1
+          fi
+
+          if echo ",$final_labels," | grep -q ",needs-fix,"; then
+            echo "Issue #${ISSUE_NUMBER} still has needs-fix after fix-agent label restore." >&2
+            exit 1
+          fi
+
+      - name: Dispatch review tracer for updated PR
+        if: steps.validate.outputs.cycle_recorded != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh workflow run review-tracer.yml \
+            --repo "$REPOSITORY" \
+            -f "pr_number=${PR_NUMBER}"
+
+      - name: Record completed fix cycle on linked issue
+        if: steps.validate.outputs.cycle_recorded != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cycle="${{ steps.validate.outputs.next_cycle }}"
+          artifact_path="${{ steps.validate.outputs.artifact_path }}"
+
+          {
+            echo "awk-fix-agent-cycle-count: ${cycle}"
+            echo ""
+            echo "Fix agent pushed a fix-cycle commit to PR #${PR_NUMBER}'s existing branch, restored \`needs-review\`, and explicitly re-dispatched \`review-tracer.yml\` via \`workflow_dispatch\`. Final approval and merge remain human-owned."
+            echo ""
+            echo "- Artifact: \`${artifact_path}\`"
+            echo "- Review tracer run: ${REVIEW_RUN_URL}"
+            echo "- Workflow run: ${RUN_URL}"
+          } > "$RUNNER_TEMP/fix-agent-comment.md"
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body-file "$RUNNER_TEMP/fix-agent-comment.md"

@@ -1,0 +1,327 @@
+name: Copilot Delegation
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to delegate to GitHub Copilot coding agent.
+        required: true
+        type: number
+      target_repository:
+        description: Repository where Copilot should work, in OWNER/REPO form. Defaults to this repository.
+        required: false
+        type: string
+      base_branch:
+        description: Branch Copilot should branch from. Defaults to the target repository default branch.
+        required: false
+        type: string
+      custom_instructions:
+        description: Optional extra instructions appended after the AWK safety instructions.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: copilot-delegation-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  delegate:
+    name: Delegate approved issue to GitHub Copilot coding agent
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSIGNMENT_TOKEN: ${{ secrets.AWK_COPILOT_ASSIGNMENT_TOKEN }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      INPUT_TARGET_REPOSITORY: ${{ inputs.target_repository }}
+      INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
+      EXTRA_CUSTOM_INSTRUCTIONS: ${{ inputs.custom_instructions }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Validate source issue readiness
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "issue_number must be numeric." >&2
+            exit 1
+          fi
+
+          target_repository="$INPUT_TARGET_REPOSITORY"
+          if [[ -z "$target_repository" ]]; then
+            target_repository="$SOURCE_REPOSITORY"
+          fi
+
+          if [[ ! "$target_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "target_repository must be in OWNER/REPO form." >&2
+            exit 1
+          fi
+
+          # Only source-repository API calls run here; github.token always has
+          # access to the source repo. Target-repository calls are deferred to
+          # the resolve step, which runs only after AWK_COPILOT_ASSIGNMENT_TOKEN
+          # is confirmed present. This ensures the missing-token fallback can
+          # always apply blocked:human and post manual instructions safely.
+          issue_json="$(gh api "repos/${SOURCE_REPOSITORY}/issues/${ISSUE_NUMBER}")"
+
+          if jq -e '.pull_request != null' <<<"$issue_json" >/dev/null; then
+            echo "#${ISSUE_NUMBER} is a pull request, not an issue." >&2
+            exit 1
+          fi
+
+          issue_state="$(jq -r '.state' <<<"$issue_json")"
+          if [[ "$issue_state" != "open" ]]; then
+            echo "#${ISSUE_NUMBER} is not open." >&2
+            exit 1
+          fi
+
+          has_label() {
+            local label="$1"
+            jq -e --arg label "$label" 'any(.labels[].name; . == $label)' <<<"$issue_json" >/dev/null
+          }
+
+          require_label() {
+            local label="$1"
+            if ! has_label "$label"; then
+              echo "#${ISSUE_NUMBER} must have label '$label'." >&2
+              exit 1
+            fi
+          }
+
+          reject_label() {
+            local label="$1"
+            if has_label "$label"; then
+              echo "#${ISSUE_NUMBER} cannot be delegated while label '$label' is present." >&2
+              exit 1
+            fi
+          }
+
+          require_label "agent-ready"
+          require_label "execution:agent"
+
+          reject_label "blocked"
+          reject_label "execution:human"
+          reject_label "execution:mixed"
+          reject_label "agent-in-progress"
+          reject_label "pr-open"
+
+          # Duplicate gate: only a confirmed successful delegation blocks reruns.
+          # Failed attempts (missing token or API failure) leave a failure comment
+          # without the "succeeded" marker, so reruns after failures remain safe.
+          comments_json="$(gh issue view "$ISSUE_NUMBER" --repo "$SOURCE_REPOSITORY" --json comments)"
+          if jq -e '.comments[].body | select(contains("awk-copilot-delegation succeeded"))' <<<"$comments_json" >/dev/null; then
+            echo "#${ISSUE_NUMBER} already has confirmed Copilot delegation." >&2
+            exit 1
+          fi
+
+          echo "target_repository=${target_repository}" >> "$GITHUB_OUTPUT"
+
+      - name: Stop with manual fallback when assignment token is missing
+        if: env.ASSIGNMENT_TOKEN == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fallback_base_branch="the default branch of the target repository"
+          if [[ -n "$INPUT_BASE_BRANCH" ]]; then
+            fallback_base_branch="$INPUT_BASE_BRANCH"
+          fi
+
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$SOURCE_REPOSITORY" \
+            --add-label "blocked:human"
+
+          cat > "$RUNNER_TEMP/copilot-manual-fallback.md" <<EOF
+          awk-copilot-delegation manual fallback
+
+          Copilot delegation could not run automatically because repository secret \`AWK_COPILOT_ASSIGNMENT_TOKEN\` is not configured.
+
+          Manual fallback:
+
+          1. Assign this issue to \`copilot-swe-agent[bot]\` in GitHub.
+          2. Target repository: \`${{ steps.validate.outputs.target_repository }}\`
+          3. Base branch: \`${fallback_base_branch}\`
+          4. Use the AWK Copilot instructions from workflow run ${RUN_URL}.
+
+          Labels: \`blocked:human\`.
+          EOF
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$SOURCE_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/copilot-manual-fallback.md"
+
+          echo "AWK_COPILOT_ASSIGNMENT_TOKEN is required for automated Copilot assignment." >&2
+          exit 1
+
+      - name: Validate target repository state and resolve base branch
+        id: resolve
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+        run: |
+          set -euo pipefail
+
+          # These calls use AWK_COPILOT_ASSIGNMENT_TOKEN, which is guaranteed
+          # present because the missing-token step would have exited otherwise.
+          pr_pattern="agent/issue-${ISSUE_NUMBER}-"
+          issue_ref_pattern="(^|[^0-9])#${ISSUE_NUMBER}([^0-9]|$)"
+          linked_prs="$(
+            GH_TOKEN="$ASSIGNMENT_TOKEN" gh pr list \
+              --repo "$TARGET_REPOSITORY" \
+              --state open \
+              --json number,headRefName,body,url \
+              --jq ".[] | select((.headRefName | startswith(\"${pr_pattern}\")) or (.body // \"\" | test(\"${issue_ref_pattern}\"))) | \"#\(.number) \(.headRefName) \(.url)\""
+          )"
+
+          if [[ -n "$linked_prs" ]]; then
+            echo "Open pull request already appears linked to issue #${ISSUE_NUMBER}:" >&2
+            echo "$linked_prs" >&2
+            exit 1
+          fi
+
+          base_branch="$INPUT_BASE_BRANCH"
+          if [[ -z "$base_branch" ]]; then
+            base_branch="$(GH_TOKEN="$ASSIGNMENT_TOKEN" gh repo view "$TARGET_REPOSITORY" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+          fi
+
+          if [[ -z "$base_branch" ]]; then
+            echo "Could not resolve base branch." >&2
+            exit 1
+          fi
+
+          echo "base_branch=${base_branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Record delegation attempt evidence
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          BASE_BRANCH: ${{ steps.resolve.outputs.base_branch }}
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/copilot-delegation-attempt.md" <<EOF
+          awk-copilot-delegation attempt started
+
+          AWK is attempting to delegate this agent-ready issue to GitHub Copilot coding agent.
+
+          - Source issue: #${ISSUE_NUMBER}
+          - Target repository: \`${TARGET_REPOSITORY}\`
+          - Base branch: \`${BASE_BRANCH}\`
+          - Workflow run: ${RUN_URL}
+
+          This attempt marker is audit evidence only. It does not mean assignment succeeded.
+          EOF
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$SOURCE_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/copilot-delegation-attempt.md"
+
+      - name: Assign issue to Copilot and confirm assignment
+        id: assign
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          BASE_BRANCH: ${{ steps.resolve.outputs.base_branch }}
+        run: |
+          set -euo pipefail
+
+          instructions="$(
+            cat <<EOF
+          You are implementing an Agent Workflow Kit agent-ready issue.
+
+          Requirements:
+
+          - Implement only issue #${ISSUE_NUMBER}.
+          - Keep the pull request focused and avoid unrelated cleanup.
+          - Include "Relates to #${ISSUE_NUMBER}" in the pull request body.
+          - Run the relevant tests or checks when practical.
+          - If verification cannot be run, explain exactly why in the pull request body.
+          - Do not approve or merge the pull request.
+          - Leave final human review and merge to the repository maintainer.
+
+          Additional human instructions:
+
+          ${EXTRA_CUSTOM_INSTRUCTIONS:-None.}
+          EOF
+          )"
+
+          payload="$(
+            jq -n \
+              --arg assignee "copilot-swe-agent[bot]" \
+              --arg target_repo "$TARGET_REPOSITORY" \
+              --arg base_branch "$BASE_BRANCH" \
+              --arg custom_instructions "$instructions" \
+              '{
+                assignees: [$assignee],
+                agent_assignment: {
+                  target_repo: $target_repo,
+                  base_branch: $base_branch,
+                  custom_instructions: $custom_instructions,
+                  custom_agent: "",
+                  model: ""
+                }
+              }'
+          )"
+
+          if ! response="$(
+            GH_TOKEN="$ASSIGNMENT_TOKEN" gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${SOURCE_REPOSITORY}/issues/${ISSUE_NUMBER}/assignees" \
+              --input - <<<"$payload" \
+              2> "$RUNNER_TEMP/copilot-assignment-error.txt"
+          )"; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$SOURCE_REPOSITORY" \
+              --add-label "blocked:human"
+
+            error_text="$(tr '\n' ' ' < "$RUNNER_TEMP/copilot-assignment-error.txt")"
+            gh issue comment "$ISSUE_NUMBER" \
+              --repo "$SOURCE_REPOSITORY" \
+              --body "awk-copilot-delegation failed. Assignment API returned an error for issue #${ISSUE_NUMBER}. Labels: \`blocked:human\`. Manual fallback: assign this issue to \`copilot-swe-agent[bot]\` with target repository \`${TARGET_REPOSITORY}\`, base branch \`${BASE_BRANCH}\`, and the AWK instructions from workflow run ${RUN_URL}. Error: ${error_text}"
+
+            echo "Copilot assignment API call failed: ${error_text}" >&2
+            exit 1
+          fi
+
+          # Confirm that copilot-swe-agent[bot] is now in the issue assignees.
+          # A 2xx response from the assignment endpoint does not guarantee the
+          # agent was actually activated; verify before marking the issue delegated.
+          issue_check="$(GH_TOKEN="$ASSIGNMENT_TOKEN" gh api "repos/${SOURCE_REPOSITORY}/issues/${ISSUE_NUMBER}")"
+          if ! jq -e '.assignees[] | select(.login == "copilot-swe-agent[bot]")' <<<"$issue_check" >/dev/null; then
+            gh issue edit "$ISSUE_NUMBER" \
+              --repo "$SOURCE_REPOSITORY" \
+              --add-label "blocked:human"
+
+            gh issue comment "$ISSUE_NUMBER" \
+              --repo "$SOURCE_REPOSITORY" \
+              --body "awk-copilot-delegation failed. Assignment API returned 2xx but \`copilot-swe-agent[bot]\` does not appear in the issue assignees. Labels: \`blocked:human\`. Manual fallback: assign this issue to \`copilot-swe-agent[bot]\` with target repository \`${TARGET_REPOSITORY}\`, base branch \`${BASE_BRANCH}\`, and the AWK instructions from workflow run ${RUN_URL}."
+
+            exit 1
+          fi
+
+      - name: Mark issue delegated
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          BASE_BRANCH: ${{ steps.resolve.outputs.base_branch }}
+        run: |
+          set -euo pipefail
+
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$SOURCE_REPOSITORY" \
+            --add-label "agent-in-progress"
+
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$SOURCE_REPOSITORY" \
+            --body "awk-copilot-delegation succeeded. Issue #${ISSUE_NUMBER} was assigned to \`copilot-swe-agent[bot]\` for target repository \`${TARGET_REPOSITORY}\` from base branch \`${BASE_BRANCH}\`. AWK will not approve or merge the resulting pull request. Workflow run: ${RUN_URL}"
