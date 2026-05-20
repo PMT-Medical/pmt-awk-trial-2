@@ -294,18 +294,20 @@ jobs:
             exit 1
           fi
 
-          # Confirm that copilot-swe-agent[bot] is now in the issue assignees.
+          # Confirm that a known Copilot app login is now in the issue assignees.
+          # GitHub has used both "copilot-swe-agent[bot]" (historical) and "Copilot"
+          # (current app identity) as the assignee login. Accept either form.
           # A 2xx response from the assignment endpoint does not guarantee the
           # agent was actually activated; verify before marking the issue delegated.
           issue_check="$(GH_TOKEN="$ASSIGNMENT_TOKEN" gh api "repos/${SOURCE_REPOSITORY}/issues/${ISSUE_NUMBER}")"
-          if ! jq -e '.assignees[] | select(.login == "copilot-swe-agent[bot]")' <<<"$issue_check" >/dev/null; then
+          if ! jq -e '.assignees[] | select(.login == "copilot-swe-agent[bot]" or .login == "Copilot")' <<<"$issue_check" >/dev/null; then
             gh issue edit "$ISSUE_NUMBER" \
               --repo "$SOURCE_REPOSITORY" \
               --add-label "blocked:human"
 
             gh issue comment "$ISSUE_NUMBER" \
               --repo "$SOURCE_REPOSITORY" \
-              --body "awk-copilot-delegation failed. Assignment API returned 2xx but \`copilot-swe-agent[bot]\` does not appear in the issue assignees. Labels: \`blocked:human\`. Manual fallback: assign this issue to \`copilot-swe-agent[bot]\` with target repository \`${TARGET_REPOSITORY}\`, base branch \`${BASE_BRANCH}\`, and the AWK instructions from workflow run ${RUN_URL}."
+              --body "awk-copilot-delegation failed. Assignment API returned 2xx but neither \`copilot-swe-agent[bot]\` nor \`Copilot\` appears in the issue assignees. Labels: \`blocked:human\`. Manual fallback: assign this issue to the GitHub Copilot coding agent with target repository \`${TARGET_REPOSITORY}\`, base branch \`${BASE_BRANCH}\`, and the AWK instructions from workflow run ${RUN_URL}."
 
             exit 1
           fi
@@ -324,4 +326,4 @@ jobs:
 
           gh issue comment "$ISSUE_NUMBER" \
             --repo "$SOURCE_REPOSITORY" \
-            --body "awk-copilot-delegation succeeded. Issue #${ISSUE_NUMBER} was assigned to \`copilot-swe-agent[bot]\` for target repository \`${TARGET_REPOSITORY}\` from base branch \`${BASE_BRANCH}\`. AWK will not approve or merge the resulting pull request. Workflow run: ${RUN_URL}"
+            --body "awk-copilot-delegation succeeded. Issue #${ISSUE_NUMBER} was assigned to GitHub Copilot coding agent for target repository \`${TARGET_REPOSITORY}\` from base branch \`${BASE_BRANCH}\`. AWK will not approve or merge the resulting pull request. Workflow run: ${RUN_URL}"
