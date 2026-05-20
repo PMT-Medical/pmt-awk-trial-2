@@ -106,12 +106,13 @@ jobs:
           copilot_matched_prs=""
           copilot_login="$(jq -r '.assignees[] | select(.login == "Copilot" or .login == "copilot-swe-agent[bot]") | .login' <<<"$issue_json" | head -1)"
           if [[ -n "$copilot_login" ]]; then
-            # Accept both known Copilot login forms for PR author matching.
-            # GitHub has returned "Copilot" (issue assignee) and "copilot-swe-agent[bot]"
-            # (historical) — the issue assignee and PR author contexts may differ.
+            # Accept known Copilot login forms for PR author matching.
+            # GitHub REST has returned "Copilot", while gh pr list has returned
+            # "app/copilot-swe-agent" and historical bot-shaped contexts may
+            # return "copilot-swe-agent[bot]".
             copilot_matched_prs="$(jq -r --arg n "$issue_number" \
               '[.[] |
-                select(.author.login == "Copilot" or .author.login == "copilot-swe-agent[bot]") |
+                select(.author.login == "Copilot" or .author.login == "copilot-swe-agent[bot]" or .author.login == "app/copilot-swe-agent") |
                 select(
                   ((.body // "") | test("(?i)(closes|fixes|resolves|relates to)\\s+#[0-9]+") | not)
                   or
