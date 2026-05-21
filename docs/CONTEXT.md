@@ -12,28 +12,55 @@ Put mutable state — current implementation status, open questions, and recomme
 
 ## Context Scope
 
-<!-- Mark the intended shape of this file: domain-context, orientation-context, or combined-context. -->
+orientation-context
 
 ## Durable Orientation
 
-<!-- Optional. Summarize what this repository does, who uses it, and the core workflows only when that context is not already clear in AGENTS.md or README.md. Link instead of duplicating. -->
+`pmt-awk-trial-2` hosts the **synthetic context-reduction trial pack** assembled under PRD #26.
+
+The trial pack is a minimal, self-contained set of repository artifacts designed so that a fresh agent can orient from bounded durable context — `AGENTS.md`, this file, `docs/NEXT.md`, and a scoped GitHub issue — without relying on long chat history. The follow-up experiment (**runner trial**) assigns a fresh agent a scoped implementation issue and measures whether the agent completes it correctly while staying within the bounded search surface.
+
+The trial pack consists of two companion slices:
+
+- **Docs slice (issue #27):** `README.md`, `docs/CONTEXT.md`, and `docs/NEXT.md` — the durable orientation layer.
+- **Code/test slice:** a small code surface and automated tests — the behavioral verification target for the runner trial.
+
+Both slices are developed on `feature/prd-26` and reviewed together before the branch is merged to `main`.
+
+This repository also retains its earlier AWK install trial seed state (custom issue templates, labels, and a locally installed skill). That seed state is preserved and is part of the bounded surface the runner trial may exercise. See `README.md` for the full seed inventory.
 
 ## Domain Language
 
-<!-- Define product, business, or technical-domain terms that agents should use consistently. -->
+| Term | Meaning |
+|------|---------|
+| Trial pack | The complete set of repo artifacts (docs + code + tests) assembled for a bounded agent trial. |
+| Context-reduction trial | A trial that measures whether agents can complete scoped work from durable docs alone, without long chat context. |
+| Runner trial | The follow-up experiment: a fresh agent is given a scoped issue and must orient from the trial pack alone. |
+| Bounded search surface | The explicit set of files an agent should read. Runner issues list this surface in a "Runner Context" section. |
+| Docs slice | The markdown-only portion of the trial pack (issue #27). |
+| Code/test slice | The code and test portion of the trial pack; the behavioral verification layer. |
 
 ## Relationship Map
 
-<!-- Describe how important domain concepts relate to each other. Keep this conceptual, not a code map. -->
+The trial pack layers are ordered by reading sequence:
+
+1. `AGENTS.md` — operating rules for any agent in this repo
+2. `docs/CONTEXT.md` (this file) — stable orientation, terminology, and constraints
+3. `docs/NEXT.md` — mutable handoff state and recommended next work
+4. Scoped GitHub issue — the concrete assignment, including "Runner Context" listing which files to read
+
+The code/test slice provides the behavioral target: the runner trial gives the agent an issue that points at the code surface, and the automated tests verify the agent's output.
 
 ## Important Constraints
 
-<!-- Note durable security, compliance, performance, deployment, compatibility, or domain constraints. Put commands and operating rules in AGENTS.md unless they are only linked here. -->
-
-## Operational Notes
-
-<!-- Optional. Link deployment, monitoring, migrations, scheduled jobs, data handling, or support runbooks. Avoid duplicating runbooks. -->
+- The trial pack is intentionally small. Do not expand the code or test surface without a new PRD slice.
+- Docs must remain consistent with `AGENTS.md`. If `AGENTS.md` changes materially, update this file.
+- Runner issues must include a "Runner Context" section so agents know the bounded search surface upfront.
+- This repository does not have a build or deploy pipeline. All verification is local (test suite or manual checks).
 
 ## Links
 
-<!-- Link ADRs, dashboards, docs, issue boards, runbooks, and external references. -->
+- [`AGENTS.md`](../AGENTS.md) — coding-agent operating instructions (source of truth)
+- [`docs/NEXT.md`](NEXT.md) — mutable handoff state
+- [`docs/adr/`](adr/) — architecture decision records
+- `README.md` — repository overview and navigation
