@@ -8,17 +8,19 @@ Keep this file current, concise, and mutable. Put stable terminology, durable co
 
 ## Current State
 
-<!-- Summarize what exists now. Focus on facts a fresh agent needs before choosing next work. -->
-<!-- - Current fact or recently completed milestone -->
+- PRD #10 (`math_utils` module) is in progress. Slice #11 (`add`) is implemented and under review in PR #13.
+- `pyproject.toml` added with `pythonpath = ["."]` so `pytest -q` works on a clean checkout.
+- Slice #12 (`multiply`) is not yet started.
 
 ## Most Recent Direction
 
-<!-- Summarize the latest human direction, recent trial, recently merged PR, or current focus. Link issues, PRs, ADRs, or docs when possible. -->
+Implementing PRD #10 as vertical slices targeting `feature/prd-10`. Each slice PR targets that branch; `feature/prd-10` merges to `main` after all slices land.
 
 ## Recommended Next Work
 
-<!-- List the next concrete steps in priority order. Prefer issue links when issues exist. -->
-<!-- 1. Next concrete step -->
+1. Merge PR #13 (slice #11 — `add`), then **manually close issue #11** (GitHub will not auto-close it because the PR targets `feature/prd-10`, not `main`).
+2. Implement slice #12 (`multiply` in `math_utils.py`) — branch from `feature/prd-10`, target `feature/prd-10`.
+3. After all slices land, open `feature/prd-10` → `main` PR to complete PRD #10.
 
 ## Open Questions
 
@@ -27,5 +29,5 @@ Keep this file current, concise, and mutable. Put stable terminology, durable co
 
 ## Do Not Reopen Without Reason
 
-<!-- List settled decisions or boundaries that future agents should not relitigate casually. Link ADRs where possible. -->
-<!-- - Settled decision or boundary -->
+- All PRD #10 slice PRs target `feature/prd-10`, not `main`. This is intentional — slices integrate there before a single feature PR lands on `main`.
+- Issue auto-close via "Closes #N" only works when the PR merges to the default branch (`main`). Slice PRs must close their issues manually.
